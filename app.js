@@ -22,7 +22,14 @@
     const type = definitions.find(x => x.Identifier === key)?.DataType;
     return ['int','float','double','long'].includes(type) ? finite(row.value) : true;
   }
-  const reading = key => hasData(key) && finite(items[key].value) ? items[key] : null;
+  function currentField(key) {
+    if (!hasData(key) || !activeChannel(key)) return false;
+    // Full gateway reports carry FwVersion; values older than that report can
+    // belong to earlier simulations or channels the current gateway omitted.
+    const baseline=items.FwVersion?.time;
+    return !finite(baseline) || Number(items[key].time)>=Number(baseline)-2000;
+  }
+  const reading = key => currentField(key) && finite(items[key].value) ? items[key] : null;
   const num = key => reading(key) ? Number(items[key].value) : null;
   const show = (key, digits = 2, unit = '') => num(key) === null ? '' : num(key).toFixed(digits) + unit;
   const stale = row => !connected || clockNow() - Math.min(Number(row.time), receivedAt || clockNow()) > staleThreshold();
@@ -105,9 +112,9 @@
       if (!items[key] || Number(row.time)>Number(items[key].time)) changes[key]=next[key];
     }
     items=next; receivedAt=now;
-    const validChanges=Object.fromEntries(Object.entries(changes).filter(([key])=>hasData(key)));
+    const validChanges=Object.fromEntries(Object.entries(changes).filter(([key])=>currentField(key)));
     if (Object.keys(validChanges).length) {
-      const snapshot=Object.fromEntries(definitions.filter(def=>hasData(def.Identifier)).map(def=>[def.Identifier,items[def.Identifier]]));
+      const snapshot=Object.fromEntries(definitions.filter(def=>currentField(def.Identifier)).map(def=>[def.Identifier,items[def.Identifier]]));
       records.push({receivedAt:now,reportedAt:Math.max(...Object.values(validChanges).map(row=>row.time)),items:validChanges,snapshot}); records=records.filter(r=>r.receivedAt>=now-3600000).slice(-MAX); count++;
       $('exportBtn').disabled=false; if (count===1) log('已收到第一条真实属性记录。');
     }
@@ -115,7 +122,6 @@
 
   function metricFooter(id,key,prefix='') {
     const row=reading(key); $(id).textContent=row?prefix+'上报 '+fmt(row.time)+(stale(row)?' · 较久未更新':''):'';
-    $(id).closest('.metric').classList.toggle('stale',!!row&&stale(row));
   }
   function fitReadings() {
     document.querySelectorAll('.metric:not(.hidden) .reading').forEach(container=>{
@@ -137,7 +143,7 @@
     document.querySelectorAll('[data-metric]').forEach(card=>visible(card,card.dataset.metric==='temperature'?!!max:!!reading(card.dataset.metric)));
     const metricCount=document.querySelectorAll('[data-metric]:not(.hidden)').length;
     visible($('metricGrid'),metricCount>0); $('metricGrid').style.setProperty('--metric-count',String(metricCount||1)); $('metricGrid').dataset.count=String(metricCount);
-    document.querySelectorAll('[data-field]').forEach(node=>visible(node,hasData(node.dataset.field)));
+    document.querySelectorAll('[data-field]').forEach(node=>visible(node,currentField(node.dataset.field)));
     visible(document.querySelector('.cell-stats'),[...document.querySelectorAll('.cell-stats [data-field]')].some(node=>!node.classList.contains('hidden')));
     $('cellCount').textContent=show('CellCount',0,' 串'); visible($('cellCount'),!!reading('CellCount'));
     $('minCell').textContent=show('MinCellVoltage',3,' V'); $('maxCell').textContent=show('MaxCellVoltage',3,' V'); $('averageCell').textContent=show('AverageCellVoltage',3,' V');
@@ -149,7 +155,7 @@
     visible($('cellsModule'),cells.length>0);
     const values=cells.map(x=>num(x.Identifier)).filter(Number.isFinite),minimum=Math.min(...values),maximum=Math.max(...values);
     $('cells').replaceChildren(...cells.map(def=>{
-      const row=items[def.Identifier],n=Number(def.Identifier.slice(11)),card=element('div',undefined,'cell'+(stale(row)?' stale':'')); card.dataset.field=def.Identifier;
+      const row=items[def.Identifier],n=Number(def.Identifier.slice(11)),card=element('div',undefined,'cell'); card.dataset.field=def.Identifier;
       if (values.length>1 && minimum<maximum) card.classList.add(Number(row.value)===minimum?'cell-min':Number(row.value)===maximum?'cell-max':'cell-normal');
       const label=element('small',String(n));
       const value=element('strong',Number(row.value).toFixed(3)); value.append(element('em','V'));
@@ -161,7 +167,7 @@
     const probes=definitions.filter(x=>/^Temperature\d+$/.test(x.Identifier)&&reading(x.Identifier)&&activeChannel(x.Identifier)).sort((a,b)=>a.Identifier.localeCompare(b.Identifier,undefined,{numeric:true}));
     visible($('temperatureModule'),probes.length>0); $('probeCount').textContent=probes.length+' 个探头';
     $('temperatures').replaceChildren(...probes.map(def=>{
-      const row=items[def.Identifier],card=element('div',undefined,'probe'+(stale(row)?' stale':'')); card.dataset.field=def.Identifier;
+      const row=items[def.Identifier],card=element('div',undefined,'probe'); card.dataset.field=def.Identifier;
       const value=element('strong',Number(row.value).toFixed(1)); value.append(element('em','°C'));
       card.append(element('small',def.Name),value,element('time',fmt(row.time)+(stale(row)?' · 较久未更新':''))); return card;
     }));
@@ -170,7 +176,7 @@
     const m=/^(CellVoltage|Temperature)(\d+)$/.exec(key);
     if(!m) return true;
     const count=num(m[1]==='CellVoltage'?'CellCount':'TempSensorCount');
-    return count===null || Number(m[2])<=count;
+    return count!==null && Number(m[2])<=count;
   }
   const groups={
     cellular:{module:'cellularModule',target:'cellularFields',keys:['CellularModuleModel','CellularCsq']},
@@ -180,7 +186,7 @@
   };
   function renderGroups() {
     for (const group of Object.values(groups)) {
-      const keys=group.keys.filter(hasData); visible($(group.module),keys.length>0);
+      const keys=group.keys.filter(currentField); visible($(group.module),keys.length>0);
       $(group.target).replaceChildren(...keys.map(key=>{
         const def=definitions.find(x=>x.Identifier===key),row=items[key],div=element('div'); div.dataset.field=key;
         div.append(element('span',def.Name,'field-name')); const value=element('strong',undefined,'field-value');
@@ -193,15 +199,15 @@
         div.append(value); div.title=key+' · '+fmt(row.time,true); return div;
       }));
     }
-    const attention=['ProtectionStatus','OtaErrorCode'].some(key=>reading(key)&&num(key)!==0);
+    const attention=['ProtectionStatus','OtaErrorCode'].some(key=>currentField(key)&&reading(key)&&num(key)!==0);
     $('alertBadge').textContent=attention?'状态码需关注':'设备上报值'; $('alertBadge').classList.toggle('attention',attention);
   }
   function renderTable() {
     const query=$('search').value.trim().toLowerCase();
-    const filtered=definitions.filter(def=>(def.Identifier+' '+def.Name).toLowerCase().includes(query));
-    const available=definitions.filter(def=>hasData(def.Identifier));
-    $('fieldCount').textContent=available.length+' / '+definitions.length+' 项有值';
-    visible($('propertiesModule'),true);visible($('noResults'),!filtered.length);
+    const available=definitions.filter(def=>currentField(def.Identifier));
+    const filtered=available.filter(def=>(def.Identifier+' '+def.Name).toLowerCase().includes(query));
+    $('fieldCount').textContent=available.length+' 项';
+    visible($('propertiesModule'),available.length>0);visible($('noResults'),!filtered.length);
     $('propertyRows').replaceChildren(...filtered.map(def=>{
       const key=def.Identifier,row=items[key],present=hasData(key),tr=element('tr');tr.dataset.field=key;
       const name=element('td');name.append(element('strong',def.Name||key),element('small',key));
@@ -235,7 +241,7 @@
   }
   function tick() {
     $('clock').textContent=fmt(clockNow(),true);
-    const valid=definitions.filter(def=>hasData(def.Identifier)).map(def=>items[def.Identifier]),latest=valid.length?Math.max(...valid.map(row=>row.time)):0;
+    const valid=definitions.filter(def=>currentField(def.Identifier)).map(def=>items[def.Identifier]),latest=valid.length?Math.max(...valid.map(row=>row.time)):0;
     visible($('telemetry'),valid.length>0); visible($('emptyState'),valid.length===0);
     $('latestTime').textContent=latest?fmt(latest,true):'';
     const aged=valid.some(stale),age=latest?Math.max(0,Math.floor((clockNow()-Math.min(latest,receivedAt))/1000)):0;
