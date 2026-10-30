@@ -60,6 +60,26 @@
 .cell-max .cell-battery:after{background:var(--red)}
 @media(max-width:700px){.cell{gap:4px;padding-right:4px}.cell small{width:14px;font-size:10px}.cell strong{font-size:13px}.cell strong em{font-size:9px}.cell-battery{min-height:40px}}
 @media(max-width:360px){.cell strong{font-size:14px}}
+
+.module-grid{align-items:stretch}
+.module-grid>.module{grid-column:span 4}
+#cellsModule{grid-column:span 8}
+#temperatureModule{grid-column:span 4}
+#trendsModule,#historyModule,#otaModule{grid-column:1/-1}
+.alarm-overlay{position:fixed;inset:0;z-index:1000;display:grid;place-items:center;padding:20px;background:#111d2bd9;backdrop-filter:blur(3px)}
+.alarm-dialog{width:min(100%,460px);max-height:min(90dvh,760px);overflow:auto;padding:18px;border:2px solid var(--red);border-radius:10px;background:var(--surface);box-shadow:0 18px 70px #0006;color:var(--text)}
+.alarm-heading{display:flex;align-items:center;gap:12px}
+.alarm-icon{display:grid;place-items:center;width:42px;height:42px;flex:none;border-radius:50%;background:var(--red);color:white;font-size:27px;font-weight:750}
+.alarm-eyebrow{margin:0;color:var(--red);font-size:10px;font-weight:700}
+.alarm-heading h2{margin:2px 0;font-size:20px;line-height:1.3}
+.alarm-status{margin:14px 0 8px;padding:9px 11px;border-radius:6px;background:var(--red-soft);color:var(--red);font-size:13px;font-weight:650}
+.alarm-details{padding:10px 13px;border:1px solid var(--line);border-radius:6px;font-size:13px}
+.alarm-details ul{margin:5px 0 0;padding-left:20px;color:var(--red);font-weight:600}
+.alarm-note{margin:8px 0;color:var(--muted);font-size:11px}
+.alarm-dismiss{width:100%;min-height:44px;border:0;background:var(--red);color:white;font-weight:700}
+.alarm-dismiss:hover{background:var(--red);filter:brightness(.92)}
+@media(max-width:1050px){.module-grid>.module,#cellsModule,#temperatureModule{grid-column:span 6}}
+@media(max-width:700px){.module-grid>.module,#cellsModule,#temperatureModule,#trendsModule,#historyModule,#otaModule{grid-column:1/-1}.alarm-dialog{padding:21px 18px}.alarm-heading h2{font-size:20px}}
 .interval-control{display:flex;align-items:center;gap:8px;min-height:44px;padding:0 10px 0 12px;border:1px solid var(--line);border-radius:8px;background:var(--surface);color:var(--muted);font-size:11px;white-space:nowrap}
 .interval-control select{min-height:40px;border:0;background:var(--surface);color:var(--text);font:inherit;cursor:pointer}
 .interval-control select:focus-visible{outline:2px solid var(--accent);outline-offset:1px}

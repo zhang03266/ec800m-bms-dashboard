@@ -12,6 +12,7 @@
   const staleThreshold = () => STALE + Math.max(0,interval*1000-10000);
   let items = {}, records = [], historyRecords=[], historyTruncated=false, token = '', generation = 0, pollTimer, controller, historyController;
   let connected = false, lastFetch = 0, receivedAt = 0, selected = 'PackVoltage', count = 0, serverOffset = 0;
+  let lastObservedProtection=null, protectionIncident=0, dismissedIncident=0;
   const clockNow = () => Date.now() + serverOffset;
   const finite = value => value !== null && value !== undefined && String(value).trim() !== '' && Number.isFinite(Number(value));
   const fmt = (time, full = false) => new Date(Number(time)).toLocaleString('zh-CN', {timeZone:'Asia/Shanghai',hour12:false,...(full?{month:'2-digit',day:'2-digit'}:{}),hour:'2-digit',minute:'2-digit',second:'2-digit'});
@@ -60,7 +61,7 @@
   else if (scheme.addListener) scheme.addListener(updateSystemTheme);
 
   function cancel() { generation++; clearTimeout(pollTimer); if (controller) controller.abort(); if(historyController)historyController.abort(); controller = null; historyController=null; token = ''; connected = false; $('refreshBtn').disabled = true; $('historyLoad').disabled=true; }
-  function clearData() { items = {}; records = []; historyRecords=[];historyTruncated=false;count = 0; receivedAt = 0; lastFetch = 0; $('exportBtn').disabled = true;$('historyExport').disabled=true; $('historyChart').replaceChildren(); visible($('historyChart').parentElement,false); $('historyStatus').textContent='选择时间范围后查询'; renderAll(); }
+  function clearData() { items = {}; records = []; historyRecords=[];historyTruncated=false;count = 0; receivedAt = 0; lastFetch = 0;lastObservedProtection=null;protectionIncident=0;dismissedIncident=0;$('protectionDialog').classList.add('hidden');$('protectionDialog').setAttribute('aria-hidden','true');document.body.style.overflow=''; $('exportBtn').disabled = true;$('historyExport').disabled=true; $('historyChart').replaceChildren(); visible($('historyChart').parentElement,false); $('historyStatus').textContent='选择时间范围后查询'; renderAll(); }
   function empty(title, description) { $('emptyTitle').textContent = title; $('emptyDescription').textContent = description; }
   function start() {
     cancel(); serverOffset = 0; clearData();
@@ -185,11 +186,29 @@
     ota:{module:'otaModule',target:'otaFields',keys:['OtaStatus','OtaProgress','OtaFlag','OtaErrorCode','OtaTargetVersion']}
   };
   const protectionNames=['单体过压','单体欠压','总压过压','总压欠压','充电高温','充电低温','放电高温','放电低温','充电过流','放电过流','短路','采集芯片故障','MOS 软件锁定','充电超时'];
+  function updateProtectionDialog(value,row) {
+    if(lastObservedProtection===null){if(value>0)protectionIncident++;}
+    else if(value!==lastObservedProtection&&value>0)protectionIncident++;
+    lastObservedProtection=value;
+    const dialog=$('protectionDialog'),open=!dialog.classList.contains('hidden');
+    $('alarmDescription').textContent=value>0?'保护状态码 '+value+' · '+fmt(row.time,true):open?'保护已解除 · '+fmt(row.time,true):'';
+    const details=$('alarmProtectionDetails');details.replaceChildren();
+    if(value>0){
+      const list=element('ul');protectionNames.forEach((name,bit)=>{if(value&(1<<bit))list.append(element('li',name));});
+      const unknown=value&0xC000;if(unknown)list.append(element('li','未识别保护位 0x'+unknown.toString(16).toUpperCase()));
+      details.append(element('strong','当前触发项'),list);
+    } else details.append(element('strong',open?'保护状态已恢复为 0x0000':'无当前保护'));
+    if(value>0&&dismissedIncident!==protectionIncident){
+      const wasHidden=dialog.classList.contains('hidden');dialog.classList.remove('hidden');dialog.setAttribute('aria-hidden','false');document.body.style.overflow='hidden';
+      if(wasHidden)requestAnimationFrame(()=>$('alarmDismiss').focus({preventScroll:true}));
+    }
+  }
   function renderProtection() {
     const target=$('protectionDetails'),row=reading('ProtectionStatus');
     visible(target,!!row);target.replaceChildren();target.classList.remove('attention');if(!row)return;
     const value=Number(row.value);
     if(!Number.isInteger(value)||value<0||value>65535){target.textContent='保护状态码无效：'+String(row.value);return;}
+    updateProtectionDialog(value,row);
     const hex='0x'+value.toString(16).toUpperCase().padStart(4,'0');
     if(value===0){target.append(element('strong','未报告保护 · '+hex));return;}
     target.append(element('strong','当前保护 · '+hex));
@@ -338,6 +357,10 @@
     const url=URL.createObjectURL(new Blob(['\ufeff'+lines.join('\r\n')],{type:'text/csv;charset=utf-8'})),a=element('a');a.href=url;a.download='BMS-'+new Date().toISOString().replace(/[:.]/g,'-')+'.csv';a.click();setTimeout(()=>URL.revokeObjectURL(url),2000);
   });
   $('historyLoad').addEventListener('click',loadHistory);
+  $('alarmDismiss').addEventListener('click',()=>{
+    dismissedIncident=protectionIncident;const dialog=$('protectionDialog');dialog.classList.add('hidden');dialog.setAttribute('aria-hidden','true');document.body.style.overflow='';
+  });
+  document.addEventListener('keydown',event=>{if(event.key==='Escape'&&!$('protectionDialog').classList.contains('hidden'))event.preventDefault();},true);
   $('historyExport').addEventListener('click',()=>{
     if(!historyRecords.length)return;
     const field=$('historyField').value,days=Number($('historyDays').value),def=definitions.find(item=>item.Identifier===field),unit=def?.Unit?' ('+def.Unit+')':'';
