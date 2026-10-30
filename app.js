@@ -10,7 +10,7 @@
   $('intervalDisplay').textContent=interval+' 秒';
   $('cacheHint').classList.toggle('hidden',interval!==5);
   const staleThreshold = () => STALE + Math.max(0,interval*1000-10000);
-  let items = {}, records = [], token = '', generation = 0, pollTimer, controller, historyController;
+  let items = {}, records = [], historyRecords=[], historyTruncated=false, token = '', generation = 0, pollTimer, controller, historyController;
   let connected = false, lastFetch = 0, receivedAt = 0, selected = 'PackVoltage', count = 0, serverOffset = 0;
   const clockNow = () => Date.now() + serverOffset;
   const finite = value => value !== null && value !== undefined && String(value).trim() !== '' && Number.isFinite(Number(value));
@@ -60,7 +60,7 @@
   else if (scheme.addListener) scheme.addListener(updateSystemTheme);
 
   function cancel() { generation++; clearTimeout(pollTimer); if (controller) controller.abort(); if(historyController)historyController.abort(); controller = null; historyController=null; token = ''; connected = false; $('refreshBtn').disabled = true; $('historyLoad').disabled=true; }
-  function clearData() { items = {}; records = []; count = 0; receivedAt = 0; lastFetch = 0; $('exportBtn').disabled = true; $('historyChart').replaceChildren(); visible($('historyChart').parentElement,false); $('historyStatus').textContent='选择时间范围后查询'; renderAll(); }
+  function clearData() { items = {}; records = []; historyRecords=[];historyTruncated=false;count = 0; receivedAt = 0; lastFetch = 0; $('exportBtn').disabled = true;$('historyExport').disabled=true; $('historyChart').replaceChildren(); visible($('historyChart').parentElement,false); $('historyStatus').textContent='选择时间范围后查询'; renderAll(); }
   function empty(title, description) { $('emptyTitle').textContent = title; $('emptyDescription').textContent = description; }
   function start() {
     cancel(); serverOffset = 0; clearData();
@@ -283,7 +283,7 @@
     if(!token || historyController)return;
     const field=$('historyField').value,days=Number($('historyDays').value),myGeneration=generation,request=new AbortController();
     if(!field)return;
-    historyController=request;$('historyLoad').disabled=true;$('historyChart').replaceChildren();visible($('historyChart').parentElement,false);
+    historyController=request;$('historyLoad').disabled=true;$('historyExport').disabled=true;historyRecords=[];historyTruncated=false;$('historyChart').replaceChildren();visible($('historyChart').parentElement,false);
     let cursor=null,pages=0,points=[],more=false;
     try {
       do {
@@ -298,7 +298,7 @@
         if(more&&cursor!==null&&next>=cursor)throw Error('历史分页异常');
         cursor=more?next:null;pages++;
       } while(more&&pages<100);
-      const unique=new Map(points.map(p=>[p.time,p]));points=[...unique.values()].sort((a,b)=>a.time-b.time);
+      const unique=new Map(points.map(p=>[p.time,p]));points=[...unique.values()].sort((a,b)=>a.time-b.time);historyRecords=points;historyTruncated=more;$('historyExport').disabled=!points.length;
       renderHistory(points,days,field);
       $('historyStatus').textContent=points.length?'近 '+days+' 天 · '+points.length+' 条记录'+(more?' · 记录较多，仅显示最近 5000 条':''):'该时间范围没有已上报记录';
     } catch(error) {
@@ -338,6 +338,14 @@
     const url=URL.createObjectURL(new Blob(['\ufeff'+lines.join('\r\n')],{type:'text/csv;charset=utf-8'})),a=element('a');a.href=url;a.download='BMS-'+new Date().toISOString().replace(/[:.]/g,'-')+'.csv';a.click();setTimeout(()=>URL.revokeObjectURL(url),2000);
   });
   $('historyLoad').addEventListener('click',loadHistory);
+  $('historyExport').addEventListener('click',()=>{
+    if(!historyRecords.length)return;
+    const field=$('historyField').value,days=Number($('historyDays').value),def=definitions.find(item=>item.Identifier===field),unit=def?.Unit?' ('+def.Unit+')':'';
+    const quote=value=>'"'+String(value??'').replace(/"/g,'""')+'"',safe=value=>/^[\s]*[=+@\-\t\r]/.test(String(value))&&!finite(value)?"'"+value:value;
+    const lines=[['序号','上报时间（北京时间）',def?.Name||field,'标识符', '选择范围（天）'].map(quote).join(',')];
+    historyRecords.forEach((row,index)=>{const time=new Date(row.time).toLocaleString('sv-SE',{timeZone:'Asia/Shanghai',hour12:false});lines.push([index+1,time,safe(row.value),field,days].map(quote).join(','));});
+    const url=URL.createObjectURL(new Blob(['\ufeff'+lines.join('\r\n')],{type:'text/csv;charset=utf-8'})),a=element('a');a.href=url;a.download='BMS-history-'+field+'-'+days+'d-'+new Date().toISOString().slice(0,10)+'.csv';a.click();setTimeout(()=>URL.revokeObjectURL(url),2000);
+  });
   addEventListener('resize',()=>{renderChart();fitReadings();});addEventListener('hashchange',start);
   addEventListener('offline',()=>{if(token){connected=false;setBadge('网页已离线','warn');notice('网页网络已断开，恢复后自动读取。','warn');renderAll();}});
   addEventListener('online',()=>{if(token)poll(generation);});addEventListener('pagehide',cancel);addEventListener('pageshow',event=>{if(event.persisted)start();});
