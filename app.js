@@ -3,14 +3,14 @@
   const $ = id => document.getElementById(id);
   const preset = JSON.parse($('connectionPreset').textContent);
   const definitions = preset.fields || [], known = new Set(definitions.map(x => x.Identifier));
-  const INTERVALS = [5,10,15,30,60,180,300], STALE = 90000, MAX = 360;
+  const INTERVALS = [5,10,15,30,60,180,300], STALE = 1020000, MAX = 360;
   let interval = 10;
   try { const saved=Number(localStorage.getItem('ec800m-refresh-interval')); if(INTERVALS.includes(saved)) interval=saved; } catch {}
   $('refreshInterval').value=String(interval);
   $('intervalDisplay').textContent=interval+' 秒';
   $('cacheHint').classList.toggle('hidden',interval!==5);
   const staleThreshold = () => STALE + Math.max(0,interval*1000-10000);
-  let items = {}, records = [], token = '', generation = 0, pollTimer, controller;
+  let items = {}, records = [], token = '', generation = 0, pollTimer, controller, historyController;
   let connected = false, lastFetch = 0, receivedAt = 0, selected = 'PackVoltage', count = 0, serverOffset = 0;
   const clockNow = () => Date.now() + serverOffset;
   const finite = value => value !== null && value !== undefined && String(value).trim() !== '' && Number.isFinite(Number(value));
@@ -59,8 +59,8 @@
   if (scheme.addEventListener) scheme.addEventListener('change',updateSystemTheme);
   else if (scheme.addListener) scheme.addListener(updateSystemTheme);
 
-  function cancel() { generation++; clearTimeout(pollTimer); if (controller) controller.abort(); controller = null; token = ''; connected = false; $('refreshBtn').disabled = true; }
-  function clearData() { items = {}; records = []; count = 0; receivedAt = 0; lastFetch = 0; $('exportBtn').disabled = true; renderAll(); }
+  function cancel() { generation++; clearTimeout(pollTimer); if (controller) controller.abort(); if(historyController)historyController.abort(); controller = null; historyController=null; token = ''; connected = false; $('refreshBtn').disabled = true; $('historyLoad').disabled=true; }
+  function clearData() { items = {}; records = []; count = 0; receivedAt = 0; lastFetch = 0; $('exportBtn').disabled = true; $('historyChart').replaceChildren(); visible($('historyChart').parentElement,false); $('historyStatus').textContent='选择时间范围后查询'; renderAll(); }
   function empty(title, description) { $('emptyTitle').textContent = title; $('emptyDescription').textContent = description; }
   function start() {
     cancel(); serverOffset = 0; clearData();
@@ -88,7 +88,7 @@
       const payload = await response.json();
       if (myGeneration !== generation) return;
       if (finite(payload.queriedAt)) serverOffset = Number(payload.queriedAt)-Date.now();
-      ingest(payload); lastFetch = Date.now(); connected = true; setBadge('接口已连接','good'); empty('暂无已上报数据','收到有效上报后，对应模块将自动出现。'); renderAll();
+      ingest(payload); lastFetch = Date.now(); connected = true; $('historyLoad').disabled=false; setBadge('接口已连接','good'); empty('暂无已上报数据','收到有效上报后，对应模块将自动出现。'); renderAll();
     } catch (error) {
       if (myGeneration !== generation) return;
       connected = false; setBadge(navigator.onLine?'等待重连':'网页已离线','warn');
@@ -97,7 +97,7 @@
       log(error.name==='AbortError'?'数据读取超时。':'数据读取失败，请检查接口、网络及 CORS。'); renderAll();
     } finally {
       clearTimeout(deadline); if (controller===request) controller=null;
-      if (myGeneration===generation && token) pollTimer=setTimeout(()=>poll(myGeneration),interval*1000);
+      if (myGeneration===generation && token) pollTimer=setTimeout(()=>poll(myGeneration),(num('ProtectionStatus')>0?Math.min(interval,5):interval)*1000);
     }
   }
   function ingest(payload) {
@@ -184,7 +184,23 @@
     device:{module:'deviceModule',target:'deviceFields',keys:['RemainingCapacity','NominalCapacity','CycleCount','CellCount','TempSensorCount','Uptime','FwVersion','SoftwareVersion','HardwareVersion','ProductionDate']},
     ota:{module:'otaModule',target:'otaFields',keys:['OtaStatus','OtaProgress','OtaFlag','OtaErrorCode','OtaTargetVersion']}
   };
+  const protectionNames=['单体过压','单体欠压','总压过压','总压欠压','充电高温','充电低温','放电高温','放电低温','充电过流','放电过流','短路','采集芯片故障','MOS 软件锁定','充电超时'];
+  function renderProtection() {
+    const target=$('protectionDetails'),row=reading('ProtectionStatus');
+    visible(target,!!row);target.replaceChildren();target.classList.remove('attention');if(!row)return;
+    const value=Number(row.value);
+    if(!Number.isInteger(value)||value<0||value>65535){target.textContent='保护状态码无效：'+String(row.value);return;}
+    const hex='0x'+value.toString(16).toUpperCase().padStart(4,'0');
+    if(value===0){target.append(element('strong','未报告保护 · '+hex));return;}
+    target.append(element('strong','当前保护 · '+hex));
+    const list=element('ul');
+    protectionNames.forEach((name,bit)=>{if(value&(1<<bit))list.append(element('li',name));});
+    const unknown=value&0xC000;
+    if(unknown)list.append(element('li','未识别保护位 0x'+unknown.toString(16).toUpperCase()));
+    target.append(list);target.classList.add('attention');
+  }
   function renderGroups() {
+    renderProtection();
     for (const group of Object.values(groups)) {
       const keys=group.keys.filter(currentField); visible($(group.module),keys.length>0);
       $(group.target).replaceChildren(...keys.map(key=>{
@@ -239,6 +255,59 @@
     if(points.length){let d='',previous=null;for(const p of points){d+=(previous===null||p.time-previous>Math.max(STALE,interval*2000)?'M':'L')+x(p.time).toFixed(2)+','+y(p.value).toFixed(2)+' ';previous=p.time;}markup+=`<path d="${d}" fill="none" stroke="${color}" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round"/>`;if(points.length<=60)for(const p of points)markup+=`<circle cx="${x(p.time)}" cy="${y(p.value)}" r="3" fill="${color}" stroke="${surface}"/>`;}
     svg.innerHTML=markup;
   }
+  function renderHistoryOptions() {
+    const select=$('historyField'), options=definitions.filter(def=>['int','float','double','long','bool'].includes(def.DataType)&&currentField(def.Identifier));
+    const signature=options.map(def=>def.Identifier).join(',');
+    if(select.dataset.signature===signature)return;
+    const previous=select.value;select.replaceChildren(...options.map(def=>{const option=element('option',def.Name+(def.Unit?' ('+def.Unit+')':''));option.value=def.Identifier;return option;}));
+    if(options.some(def=>def.Identifier===previous))select.value=previous;
+    else if(options.some(def=>def.Identifier==='PackVoltage'))select.value='PackVoltage';
+    select.dataset.signature=signature;
+  }
+  function renderHistory(points,days,field) {
+    const svg=$('historyChart');svg.replaceChildren();visible(svg.parentElement,points.length>0);if(!points.length)return;
+    const end=clockNow(),start=end-days*86400000,left=52,right=880,top=16,bottom=185;
+    const vals=points.map(p=>p.value),min=Math.min(...vals),max=Math.max(...vals),pad=Math.max((max-min)*0.1,field==='ProtectionStatus'?1:0.1),lo=min-pad,hi=max+pad;
+    const x=t=>left+(right-left)*Math.max(0,Math.min(1,(t-start)/(end-start))),y=v=>bottom-(v-lo)*(bottom-top)/(hi-lo);
+    const style=getComputedStyle(document.documentElement),line=style.getPropertyValue('--line').trim(),color=style.getPropertyValue('--chart-line').trim(),text=style.getPropertyValue('--muted').trim();
+    let markup='';
+    for(let i=0;i<4;i++){const value=lo+(hi-lo)*i/3,yy=y(value);markup+=`<line x1="${left}" x2="${right}" y1="${yy}" y2="${yy}" stroke="${line}" stroke-dasharray="4 5"/><text x="${left-7}" y="${yy+4}" text-anchor="end" fill="${text}">${value.toFixed(field==='ProtectionStatus'?0:2)}</text>`;}
+    for(let i=0;i<3;i++)markup+=`<text x="${left+(right-left)*i/2}" y="207" text-anchor="${i===0?'start':i===2?'end':'middle'}" fill="${text}">${fmt(start+(end-start)*i/2,true)}</text>`;
+    let path='',prev=null;
+    for(const p of points){const px=x(p.time).toFixed(2),py=y(p.value).toFixed(2);path+=prev===null||p.time-prev.time>1800000?'M'+px+','+py:field==='ProtectionStatus'?' H'+px+' V'+py:' L'+px+','+py;prev=p;}
+    markup+=`<path d="${path}" fill="none" stroke="${color}" stroke-width="2"/>`;
+    if(points.length<=80)for(const p of points)markup+=`<circle cx="${x(p.time).toFixed(2)}" cy="${y(p.value).toFixed(2)}" r="2.5" fill="${color}"/>`;
+    svg.innerHTML=markup;
+  }
+  async function loadHistory() {
+    if(!token || historyController)return;
+    const field=$('historyField').value,days=Number($('historyDays').value),myGeneration=generation,request=new AbortController();
+    if(!field)return;
+    historyController=request;$('historyLoad').disabled=true;$('historyChart').replaceChildren();visible($('historyChart').parentElement,false);
+    let cursor=null,pages=0,points=[],more=false;
+    try {
+      do {
+        $('historyStatus').textContent='正在查询历史数据 · '+points.length+' 条';
+        const url=new URL(preset.endpoint);url.searchParams.set('view','history');url.searchParams.set('field',field);url.searchParams.set('days',String(days));if(cursor)url.searchParams.set('end',String(cursor));
+        const reply=await fetch(url,{headers:{Authorization:'Bearer '+token},mode:'cors',credentials:'omit',cache:'no-store',referrerPolicy:'no-referrer',signal:request.signal});
+        if(!reply.ok)throw Error('历史查询失败（HTTP '+reply.status+'）');
+        const data=await reply.json();if(myGeneration!==generation)return;
+        if(data.field!==field||!Array.isArray(data.items))throw Error('历史数据格式不正确');
+        for(const row of data.items){const time=Number(row.Time),value=row.Value==='true'?1:row.Value==='false'?0:Number(row.Value);if(Number.isFinite(time)&&Number.isFinite(value)&&time>0)points.push({time,value});}
+        const next=Number(data.next);more=Number.isFinite(next)&&next>0;
+        if(more&&cursor!==null&&next>=cursor)throw Error('历史分页异常');
+        cursor=more?next:null;pages++;
+      } while(more&&pages<100);
+      const unique=new Map(points.map(p=>[p.time,p]));points=[...unique.values()].sort((a,b)=>a.time-b.time);
+      renderHistory(points,days,field);
+      $('historyStatus').textContent=points.length?'近 '+days+' 天 · '+points.length+' 条记录'+(more?' · 记录较多，仅显示最近 5000 条':''):'该时间范围没有已上报记录';
+    } catch(error) {
+      if(myGeneration===generation && error.name!=='AbortError')$('historyStatus').textContent=error.message+'，请稍后重试';
+    } finally {
+      if(historyController===request)historyController=null;
+      if(myGeneration===generation && token)$('historyLoad').disabled=false;
+    }
+  }
   function tick() {
     $('clock').textContent=fmt(clockNow(),true);
     const valid=definitions.filter(def=>currentField(def.Identifier)).map(def=>items[def.Identifier]),latest=valid.length?Math.max(...valid.map(row=>row.time)):0;
@@ -250,7 +319,7 @@
     if(connected)notice(!valid.length?'接口已连接，等待设备有效上报。':quiet?'较久没有新上报：可能数值未变化，也可能设备离线；请到阿里云查看设备状态。':aged?'属性仅在变化时上报，未更新可能是数值不变。':'同步中 · 最近上报 '+fmt(latest)+' · '+age+' 秒前',quiet?'warn':'');
     renderMetrics();renderCells();renderTemperatures();renderGroups();renderTable();fitReadings();
   }
-  function renderAll(){tick();renderChart();}
+  function renderAll(){tick();renderChart();renderHistoryOptions();}
   $('refreshInterval').addEventListener('change',event=>{
     const next=Number(event.target.value); if(!INTERVALS.includes(next)){event.target.value=String(interval);return;}
     interval=next; $('intervalDisplay').textContent=interval+' 秒'; $('cacheHint').classList.toggle('hidden',interval!==5); try { localStorage.setItem('ec800m-refresh-interval',String(interval)); } catch {}
@@ -268,6 +337,7 @@
     records.forEach((record,index)=>{const time=new Date(record.reportedAt).toLocaleString('sv-SE',{timeZone:'Asia/Shanghai',hour12:false});const values=columns.map(def=>{const value=record.snapshot[def.Identifier]?.value;return safe(typeof value==='object'&&value!==null?JSON.stringify(value):value??'');});lines.push([index+1,time,...values].map(quote).join(','));});
     const url=URL.createObjectURL(new Blob(['\ufeff'+lines.join('\r\n')],{type:'text/csv;charset=utf-8'})),a=element('a');a.href=url;a.download='BMS-'+new Date().toISOString().replace(/[:.]/g,'-')+'.csv';a.click();setTimeout(()=>URL.revokeObjectURL(url),2000);
   });
+  $('historyLoad').addEventListener('click',loadHistory);
   addEventListener('resize',()=>{renderChart();fitReadings();});addEventListener('hashchange',start);
   addEventListener('offline',()=>{if(token){connected=false;setBadge('网页已离线','warn');notice('网页网络已断开，恢复后自动读取。','warn');renderAll();}});
   addEventListener('online',()=>{if(token)poll(generation);});addEventListener('pagehide',cancel);addEventListener('pageshow',event=>{if(event.persisted)start();});
