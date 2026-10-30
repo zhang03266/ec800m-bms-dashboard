@@ -1,2 +1,3 @@
-# ec800m-bms-dashboard
-EC800M + JBD BMS read-only live dashboard
+# EC800M BMS 实时看板
+
+只读 HTTPS 看板，展示54项物模型属性。完整个人链接包含只读查看权限。网页不含设备密钥或阿里云账号凭据。
