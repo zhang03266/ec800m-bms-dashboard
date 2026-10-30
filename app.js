@@ -114,7 +114,7 @@
   }
 
   function metricFooter(id,key,prefix='') {
-    const row=reading(key); $(id).textContent=row?prefix+'上报 '+fmt(row.time)+(stale(row)?' · 已过期':''):'';
+    const row=reading(key); $(id).textContent=row?prefix+'上报 '+fmt(row.time)+(stale(row)?' · 较久未更新':''):'';
     $(id).closest('.metric').classList.toggle('stale',!!row&&stale(row));
   }
   function fitReadings() {
@@ -154,7 +154,7 @@
       const label=element('small',String(n));
       const value=element('strong',Number(row.value).toFixed(3)); value.append(element('em','V'));
       const battery=element('div',undefined,'cell-battery'); battery.append(value);
-      card.append(label,battery); card.title=def.Name+' · '+fmt(row.time,true)+(stale(row)?' · 已过期':''); return card;
+      card.append(label,battery); card.title=def.Name+' · '+fmt(row.time,true)+(stale(row)?' · 较久未更新':''); return card;
     }));
   }
   function renderTemperatures() {
@@ -163,7 +163,7 @@
     $('temperatures').replaceChildren(...probes.map(def=>{
       const row=items[def.Identifier],card=element('div',undefined,'probe'+(stale(row)?' stale':'')); card.dataset.field=def.Identifier;
       const value=element('strong',Number(row.value).toFixed(1)); value.append(element('em','°C'));
-      card.append(element('small',def.Name),value,element('time',fmt(row.time)+(stale(row)?' · 已过期':''))); return card;
+      card.append(element('small',def.Name),value,element('time',fmt(row.time)+(stale(row)?' · 较久未更新':''))); return card;
     }));
   }
   function activeChannel(key) {
@@ -188,7 +188,7 @@
           const on=row.value===true||row.value==='true'||Number(row.value)===1,off=row.value===false||row.value==='false'||Number(row.value)===0,mos=key.endsWith('MosOn');
           value.append(element('span',on?(mos?'开启':'已连接'):off?(mos?'关闭':'未连接'):String(row.value),'status-pill'+(on?' on':off?' off':'')));
         } else if (key==='CellularCsq') { value.textContent=Number(row.value)===99?'未知（99）':String(row.value)+' / 31'; } else { value.append(document.createTextNode(typeof row.value==='object'?JSON.stringify(row.value):String(row.value))); if (def.Unit) value.append(element('span',def.Unit,'unit')); }
-        if (stale(row)) value.append(element('span','旧数据 · '+fmt(row.time),'old'));
+        if (stale(row)) value.append(element('span','较久未更新 · '+fmt(row.time),'old'));
         if (['ProtectionStatus','OtaErrorCode'].includes(key)&&finite(row.value)&&Number(row.value)!==0) div.classList.add('attention');
         div.append(value); div.title=key+' · '+fmt(row.time,true); return div;
       }));
@@ -208,7 +208,7 @@
       const value=element('td',present?(typeof row.value==='object'?JSON.stringify(row.value):String(row.value)):'—','value');
       if(present && def.Unit)value.append(element('span',def.Unit,'table-unit'));
       const stamp=element('td',present?fmt(row.time,true):'—'),state=element('td');
-      const status=!token?'未授权':!present?'未上报':!activeChannel(key)?'非当前通道':stale(row)?'历史值 · 已过期':'新鲜';
+      const status=!token?'未授权':!present?'未上报':!activeChannel(key)?'非当前通道':stale(row)?'较久未更新':'近期已上报';
       state.append(element('span',status,'state'+(present && stale(row)?' warn':'')));
       tr.append(name,value,stamp,state);return tr;
     }));
@@ -238,9 +238,10 @@
     const valid=definitions.filter(def=>hasData(def.Identifier)).map(def=>items[def.Identifier]),latest=valid.length?Math.max(...valid.map(row=>row.time)):0;
     visible($('telemetry'),valid.length>0); visible($('emptyState'),valid.length===0);
     $('latestTime').textContent=latest?fmt(latest,true):'';
-    const expired=valid.some(stale),age=latest?Math.max(0,Math.floor((clockNow()-Math.min(latest,receivedAt))/1000)):0;
-    $('freshness').textContent=!valid.length?'等待数据':!connected?'网页连接中断':expired?'部分数据已过期':'数据新鲜'; $('freshness').style.color=expired?'var(--amber)':'var(--accent)';
-    if(connected)notice(!valid.length?'接口已连接，等待设备有效上报。':expired?'接口已连接，部分属性超过 '+Math.round(staleThreshold()/1000)+' 秒无新上报。':'同步中 · 最近上报 '+fmt(latest)+' · '+age+' 秒前',expired?'warn':'');
+    const aged=valid.some(stale),age=latest?Math.max(0,Math.floor((clockNow()-Math.min(latest,receivedAt))/1000)):0;
+    const quiet=!!latest && age*1000>staleThreshold();
+    $('freshness').textContent=!valid.length?'等待数据':!connected?'网页连接中断':quiet?'较久无上报':aged?'部分值较久未更新':'近期已上报'; $('freshness').style.color=quiet?'var(--amber)':'var(--accent)';
+    if(connected)notice(!valid.length?'接口已连接，等待设备有效上报。':quiet?'较久没有新上报：可能数值未变化，也可能设备离线；请到阿里云查看设备状态。':aged?'属性仅在变化时上报，未更新可能是数值不变。':'同步中 · 最近上报 '+fmt(latest)+' · '+age+' 秒前',quiet?'warn':'');
     renderMetrics();renderCells();renderTemperatures();renderGroups();renderTable();fitReadings();
   }
   function renderAll(){tick();renderChart();}
